@@ -1,0 +1,39 @@
+name: CI
+permissions: { contents: read }
+on:
+  pull_request:
+  push: { branches: [main] }
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25.x", cache-dependency-path: services/identity/go.sum }
+      - run: npm ci
+      - run: npm run db:generate
+      - run: npm run check
+      - run: npm run build
+      - run: docker compose config --quiet
+      - run: docker build -f Dockerfile.api -t identity-api:ci .
+      - run: docker build -t identity-core:ci services/identity
+      - run: npm audit --audit-level=high
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_DB: identity, POSTGRES_USER: identity, POSTGRES_PASSWORD: identity }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U identity -d identity" --health-interval 5s --health-timeout 5s --health-retries 20
+    env: { DATABASE_URL: "postgresql://identity:identity@localhost:5432/identity?schema=public" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run db:generate
+      - run: npx prisma migrate deploy
+      - run: npm run e2e

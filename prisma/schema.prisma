@@ -1,0 +1,318 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+enum MfaStatus {
+  PENDING
+  ACTIVE
+  DISABLED
+}
+
+enum DeliveryStatus {
+  QUEUED
+  DELIVERED
+  FAILED
+  DEAD_LETTER
+}
+
+model User {
+  id                 String              @id @default(cuid())
+  email              String              @unique
+  displayName        String
+  verifiedAt         DateTime?
+  disabledAt         DateTime?
+  platformAdmin      Boolean             @default(false)
+  credential         Credential?
+  identities         OAuthIdentity[]
+  sessions           Session[]
+  emailVerifications EmailVerification[]
+  passwordResets     PasswordReset[]
+  mfaChallenges      MfaChallenge[]
+  memberships        Membership[]
+  mfaFactors         MfaFactor[]
+  apiKeysCreated     ApiKey[]
+  invitationsSent    Invitation[]        @relation("InvitationSender")
+  securityEvents     SecurityEvent[]
+  audits             AuditEvent[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+}
+
+model Credential {
+  userId       String   @id
+  passwordHash String
+  version      Int      @default(1)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  changedAt    DateTime @default(now())
+}
+
+model EmailVerification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, expiresAt])
+}
+
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, expiresAt])
+}
+
+model Session {
+  id            String         @id @default(cuid())
+  userId        String
+  deviceHash    String
+  ipHash        String
+  country       String
+  riskScore     Int            @default(0)
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+  revokedAt     DateTime?
+  lastSeenAt    DateTime       @default(now())
+  createdAt     DateTime       @default(now())
+
+  @@index([userId, revokedAt, lastSeenAt])
+}
+
+model RefreshToken {
+  id         String    @id @default(cuid())
+  sessionId  String
+  familyId   String
+  tokenHash  String    @unique
+  session    Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  usedAt     DateTime?
+  revokedAt  DateTime?
+  replacedBy String?
+  createdAt  DateTime  @default(now())
+
+  @@index([familyId, revokedAt])
+}
+
+model OAuthIdentity {
+  id              String   @id @default(cuid())
+  userId          String
+  provider        String
+  providerSubject String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+
+  @@unique([provider, providerSubject])
+  @@unique([userId, provider])
+}
+
+model OAuthState {
+  id           String    @id @default(cuid())
+  provider     String
+  stateHash    String    @unique
+  codeVerifierHash String
+  redirectUri  String
+  linkToUserId String?
+  expiresAt    DateTime
+  usedAt       DateTime?
+  createdAt    DateTime  @default(now())
+}
+
+model MfaFactor {
+  id               String         @id @default(cuid())
+  userId           String
+  secretCiphertext String
+  status           MfaStatus      @default(PENDING)
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recoveryCodes    RecoveryCode[]
+  confirmedAt      DateTime?
+  createdAt        DateTime       @default(now())
+
+  @@index([userId, status])
+}
+
+model RecoveryCode {
+  id        String    @id @default(cuid())
+  factorId  String
+  codeHash  String    @unique
+  factor    MfaFactor @relation(fields: [factorId], references: [id], onDelete: Cascade)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model MfaChallenge {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  deviceId  String
+  ip        String
+  country   String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model Organization {
+  id             String            @id @default(cuid())
+  name           String
+  slug           String            @unique
+  memberships    Membership[]
+  invitations    Invitation[]
+  apiKeys        ApiKey[]
+  webhooks       WebhookEndpoint[]
+  securityEvents SecurityEvent[]
+  audits         AuditEvent[]
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}
+
+model Membership {
+  organizationId String
+  userId         String
+  role           MembershipRole
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt      DateTime       @default(now())
+
+  @@id([organizationId, userId])
+  @@index([userId, organizationId])
+}
+
+model Invitation {
+  id             String           @id @default(cuid())
+  organizationId String
+  email          String
+  role           MembershipRole
+  tokenHash      String           @unique
+  status         InvitationStatus @default(PENDING)
+  invitedBy      String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sender         User             @relation("InvitationSender", fields: [invitedBy], references: [id], onDelete: Restrict)
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  createdAt      DateTime         @default(now())
+
+  @@index([organizationId, email, status])
+}
+
+model ApiKey {
+  id             String        @id @default(cuid())
+  organizationId String
+  name           String
+  prefix         String        @unique
+  tokenHash      String
+  scopes         String[]
+  createdBy      String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  creator        User          @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  usages         ApiKeyUsage[]
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId, revokedAt])
+}
+
+model ApiKeyUsage {
+  id        String   @id @default(cuid())
+  apiKeyId  String
+  route     String
+  apiKey    ApiKey   @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([apiKeyId, createdAt])
+}
+
+model SecurityEvent {
+  id             String        @id @default(cuid())
+  userId         String?
+  organizationId String?
+  type           String
+  severity       String
+  details        Json          @default("{}")
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime      @default(now())
+
+  @@index([userId, severity, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+model AuditEvent {
+  id             String        @id @default(cuid())
+  organizationId String?
+  actorId        String?
+  action         String
+  targetType     String
+  targetId       String
+  metadata       Json          @default("{}")
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor          User?         @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+model WebhookEndpoint {
+  id               String            @id @default(cuid())
+  organizationId   String
+  url              String
+  events           String[]
+  secretCiphertext String
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deliveries       WebhookDelivery[]
+  disabledAt       DateTime?
+  createdAt        DateTime          @default(now())
+}
+
+model WebhookDelivery {
+  id            String          @id @default(cuid())
+  endpointId    String
+  eventId       String
+  eventType     String
+  payload       Json
+  status        DeliveryStatus  @default(QUEUED)
+  attempts      Int             @default(0)
+  nextAttemptAt DateTime        @default(now())
+  endpoint      WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  deliveredAt   DateTime?
+  createdAt     DateTime        @default(now())
+
+  @@unique([endpointId, eventId])
+  @@index([status, nextAttemptAt])
+}
+
+model SigningKey {
+  id        String    @id
+  algorithm String    @default("EdDSA")
+  publicJwk Json
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  retiredAt DateTime?
+}
