@@ -1,0 +1,167 @@
+openapi: 3.1.0
+info:
+  title: Aegis Identity API
+  version: 1.0.0
+  description: Versioned commands and constrained Query Request reads for identity and tenant access.
+servers:
+  - url: https://identity.example.com
+security: [{ bearerAuth: [] }]
+paths:
+  /health:
+    get:
+      security: []
+      operationId: health
+      responses: { "200": { description: Healthy } }
+  /.well-known/jwks.json:
+    get:
+      security: []
+      operationId: jwks
+      responses: { "200": { description: Ed25519 verification keys } }
+  /v1/signup:
+    post:
+      security: []
+      operationId: signup
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Signup" } } } }
+      responses: { "201": { description: Verification queued }, "409": { $ref: "#/components/responses/Error" } }
+  /v1/verify-email:
+    post:
+      security: []
+      operationId: verifyEmail
+      requestBody: { $ref: "#/components/requestBodies/Token" }
+      responses: { "200": { description: Verified }, "404": { $ref: "#/components/responses/Error" } }
+  /v1/login:
+    post:
+      security: []
+      operationId: login
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Login" } } } }
+      responses: { "200": { description: Token pair or MFA challenge }, "401": { $ref: "#/components/responses/Error" }, "403": { $ref: "#/components/responses/Error" } }
+  /v1/refresh:
+    post:
+      security: []
+      operationId: refresh
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [refreshToken], properties: { refreshToken: { type: string } } } } } }
+      responses: { "200": { description: Rotated token pair }, "401": { $ref: "#/components/responses/Error" } }
+  /v1/logout:
+    post:
+      operationId: logout
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { allSessions: { type: boolean, default: false } } } } } }
+      responses: { "200": { description: Session revoked } }
+  /v1/password-reset/request:
+    post:
+      security: []
+      operationId: requestPasswordReset
+      responses: { "202": { description: Always accepted to prevent enumeration } }
+  /v1/password-reset/confirm:
+    post:
+      security: []
+      operationId: confirmPasswordReset
+      responses: { "200": { description: Credential changed and sessions revoked } }
+  /v1/oauth/start:
+    post:
+      security: []
+      operationId: startOAuth
+      responses: { "200": { description: One-time state, PKCE verifier and provider URL } }
+  /v1/oauth/callback:
+    post:
+      security: []
+      operationId: completeOAuth
+      responses: { "200": { description: Provider identity linked }, "401": { $ref: "#/components/responses/Error" } }
+  /v1/mfa/enroll:
+    post:
+      operationId: enrollMfa
+      responses: { "201": { description: Pending TOTP factor and one-time recovery codes } }
+  /v1/mfa/{id}/confirm:
+    post:
+      operationId: confirmMfa
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { "200": { description: Factor activated }, "401": { $ref: "#/components/responses/Error" } }
+  /v1/mfa/verify:
+    post:
+      security: []
+      operationId: verifyMfaChallenge
+      responses: { "200": { description: Step-up completed and token pair issued } }
+  /v1/organizations:
+    post:
+      operationId: createOrganization
+      responses: { "201": { description: Organization with caller as owner } }
+  /v1/organizations/{id}/invitations:
+    post:
+      operationId: inviteMember
+      parameters: [{ $ref: "#/components/parameters/OrganizationId" }]
+      responses: { "201": { description: Invitation queued }, "403": { $ref: "#/components/responses/Error" } }
+  /v1/invitations/accept:
+    post:
+      operationId: acceptInvitation
+      responses: { "201": { description: Membership created } }
+  /v1/organizations/{id}/policy/evaluate:
+    post:
+      operationId: evaluatePolicy
+      parameters: [{ $ref: "#/components/parameters/OrganizationId" }]
+      responses: { "200": { description: Tenant RBAC decision } }
+  /v1/organizations/{id}/api-keys:
+    post:
+      operationId: createApiKey
+      parameters: [{ $ref: "#/components/parameters/OrganizationId" }]
+      responses: { "201": { description: Scoped key shown once } }
+  /v1/organizations/{organizationId}/api-keys/{id}:
+    delete:
+      operationId: revokeApiKey
+      parameters:
+        - { in: path, name: organizationId, required: true, schema: { type: string } }
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses: { "200": { description: Key revoked } }
+  /v1/organizations/{id}/webhooks:
+    post:
+      operationId: registerWebhook
+      parameters: [{ $ref: "#/components/parameters/OrganizationId" }]
+      responses: { "201": { description: HTTPS endpoint and one-time secret } }
+  /v1/organizations/{id}/events/test:
+    post:
+      operationId: testWebhook
+      parameters: [{ $ref: "#/components/parameters/OrganizationId" }]
+      responses: { "202": { description: Signed event persisted for delivery } }
+  /v1/sessions/{id}:
+    delete:
+      operationId: revokeSession
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { "200": { description: Session revoked } }
+  /v1/query:
+    post:
+      operationId: query
+      description: Typed Query Request for sessions, members, security events or audit records. Authorization is applied per resource.
+      responses: { "200": { description: Bounded result list }, "403": { $ref: "#/components/responses/Error" } }
+  /v1/admin/signing-keys/rotate:
+    post:
+      operationId: stageSigningKeyRotation
+      description: Platform-admin operation that stages public metadata; private key rollout remains a deployment action.
+      responses: { "201": { description: Public key staged and audited }, "403": { $ref: "#/components/responses/Error" } }
+  /v1/sdk/whoami:
+    get:
+      operationId: apiKeyWhoami
+      security: [{ apiKey: [] }]
+      responses: { "200": { description: API-key organization and granted scopes } }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+    apiKey: { type: http, scheme: bearer, description: Scoped `idk_` token }
+  parameters:
+    OrganizationId: { in: path, name: id, required: true, schema: { type: string } }
+  requestBodies:
+    Token: { required: true, content: { application/json: { schema: { type: object, required: [token], properties: { token: { type: string } } } } } }
+  responses:
+    Error:
+      description: Stable machine-readable error
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+  schemas:
+    Signup:
+      type: object
+      required: [email, displayName, password]
+      properties: { email: { type: string, format: email }, displayName: { type: string }, password: { type: string, minLength: 12 } }
+    Login:
+      type: object
+      required: [email, password, deviceId, ip, country]
+      properties: { email: { type: string, format: email }, password: { type: string }, deviceId: { type: string }, ip: { type: string }, country: { type: string, minLength: 2, maxLength: 2 } }
+    Error:
+      type: object
+      required: [error]
+      properties: { error: { type: object, required: [code, message], properties: { code: { type: string }, message: { type: string } } } }
